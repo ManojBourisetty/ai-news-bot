@@ -2,9 +2,14 @@ name: AI News Daily Digest
 
 on:
   schedule:
-    - cron: "0 14 * * *"    # 8 AM CST  — Morning global news
-    - cron: "0 0 * * *"     # 6 PM CST  — Evening AI news
-    - cron: "0 16 * * 5"    # 10 AM CST Friday — Weekly AI roundup
+    - cron: "0 14 * * *"    # 9 AM CDT  — Morning (primary)
+    - cron: "30 14 * * *"   # 9:30 AM CDT — Morning (backup 1)
+    - cron: "0 15 * * *"    # 10 AM CDT — Morning (backup 2)
+    - cron: "0 0 * * *"     # 7 PM CDT  — Evening (primary)
+    - cron: "30 0 * * *"    # 7:30 PM CDT — Evening (backup 1)
+    - cron: "0 1 * * *"     # 8 PM CDT  — Evening (backup 2)
+    - cron: "0 16 * * 5"    # 11 AM CDT Friday — Weekly (primary)
+    - cron: "30 16 * * 5"   # 11:30 AM CDT Friday — Weekly (backup)
   workflow_dispatch:
     inputs:
       edition:
@@ -20,6 +25,9 @@ on:
 jobs:
   send-digest:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -36,10 +44,28 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Download seen headlines cache
-        uses: actions/download-artifact@v4
-        with:
-          name: seen-headlines
-          path: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ARTIFACT_URL=$(curl -s \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts?name=seen-headlines&per_page=5" \
+            | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          for a in data.get('artifacts', []):
+              if not a['expired']:
+                  print(a['archive_download_url'])
+                  break
+          ")
+          if [ -n "$ARTIFACT_URL" ]; then
+            curl -sL -H "Authorization: Bearer $GH_TOKEN" "$ARTIFACT_URL" -o cache.zip
+            unzip -o cache.zip -d .
+            rm -f cache.zip
+            echo "Cache loaded from previous run"
+          else
+            echo "No previous cache found, starting fresh"
+          fi
         continue-on-error: true
 
       - name: Determine edition from schedule
@@ -49,9 +75,9 @@ jobs:
           else
             HOUR=$(date -u +"%H")
             DOW=$(date -u +"%u")
-            if [ "$HOUR" = "14" ]; then
+            if [ "$HOUR" = "14" ] || [ "$HOUR" = "15" ]; then
               echo "EDITION=morning" >> $GITHUB_ENV
-            elif [ "$HOUR" = "16" ] && [ "$DOW" = "5" ]; then
+            elif ([ "$HOUR" = "16" ] || [ "$HOUR" = "17" ]) && [ "$DOW" = "5" ]; then
               echo "EDITION=weekly" >> $GITHUB_ENV
             else
               echo "EDITION=evening" >> $GITHUB_ENV
@@ -73,6 +99,7 @@ jobs:
           path: seen_headlines.json
           retention-days: 2
           overwrite: true
+          if-no-files-found: warn
 
       - name: Alert on failure
         if: failure()

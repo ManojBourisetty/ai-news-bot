@@ -110,17 +110,22 @@ STOP_WORDS = {
 def title_hash(title: str) -> str:
     return hashlib.md5(title.lower().strip().encode()).hexdigest()
 
-def load_cache() -> set:
+def load_cache() -> tuple:
+    """Returns (seen_hashes: set, last_runs: dict)."""
     try:
         with open(CACHE_FILE) as f:
-            return set(json.load(f))
+            data = json.load(f)
+        if isinstance(data, list):
+            # migrate old format (plain list of hashes)
+            return set(data), {}
+        return set(data.get("hashes", [])), data.get("last_runs", {})
     except (FileNotFoundError, json.JSONDecodeError):
-        return set()
+        return set(), {}
 
-def save_cache(existing: set, new_hashes: list):
+def save_cache(existing: set, new_hashes: list, last_runs: dict):
     combined = list(existing) + new_hashes
     with open(CACHE_FILE, "w") as f:
-        json.dump(combined[-CACHE_MAX:], f)
+        json.dump({"hashes": combined[-CACHE_MAX:], "last_runs": last_runs}, f)
 
 
 # ── Trending Score ──────────────────────────────────────────────────────────────────────────────
@@ -403,7 +408,18 @@ def main():
     )
     args = parser.parse_args()
 
-    seen               = load_cache()
+    seen, last_runs = load_cache()
+
+    # Guard: if a backup cron slot fires after the primary already succeeded,
+    # skip so we don't send duplicate messages.
+    last_run_ts = last_runs.get(args.once)
+    if last_run_ts:
+        last_dt = datetime.fromisoformat(last_run_ts)
+        age_min = int((datetime.now(timezone.utc) - last_dt).total_seconds() / 60)
+        if age_min < 360:  # 6 hours
+            log.info(f"Already sent {args.once} digest {age_min}min ago — skipping backup run.")
+            sys.exit(0)
+
     digest, new_hashes = fetch_digest(args.once, seen)
 
     if not digest:
@@ -413,7 +429,8 @@ def main():
     success = post_to_slack(digest)
 
     if success:
-        save_cache(seen, [] if args.once == "weekly" else new_hashes)
+        last_runs[args.once] = datetime.now(timezone.utc).isoformat()
+        save_cache(seen, [] if args.once == "weekly" else new_hashes, last_runs)
 
     sys.exit(0 if success else 1)
 
