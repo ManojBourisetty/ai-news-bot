@@ -1,7 +1,7 @@
 """
 AI News Daily — GitHub Actions Edition
 =======================================
-Fetches the latest global AI news via Claude (web search)
+Fetches the latest global AI news via Gemini (Google Search grounding)
 and posts a digest to Slack. Designed to be triggered by
 GitHub Actions cron schedule — no persistent process needed.
 
@@ -10,9 +10,9 @@ Usage:
     python ai_news_bot.py --once evening
 
 Environment Variables (set as GitHub Actions Secrets):
-    ANTHROPIC_API_KEY   - Anthropic API key
-    SLACK_BOT_TOKEN     - Slack Bot OAuth token (xoxb-...)
-    SLACK_CHANNEL_ID    - Slack channel ID (e.g. C0B8HAB6589)
+    GEMINI_API_KEY    - Google AI Studio API key (free at aistudio.google.com)
+    SLACK_BOT_TOKEN   - Slack Bot OAuth token (xoxb-...)
+    SLACK_CHANNEL_ID  - Slack channel ID (e.g. C0B8HAB6589)
 """
 
 import os
@@ -22,7 +22,8 @@ import argparse
 from datetime import datetime
 import pytz
 
-import anthropic
+from google import genai
+from google.genai import types
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
@@ -34,15 +35,16 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-SLACK_BOT_TOKEN   = os.environ["SLACK_BOT_TOKEN"]
-SLACK_CHANNEL_ID  = os.environ["SLACK_CHANNEL_ID"]
-TIMEZONE          = "America/Chicago"
+GEMINI_API_KEY   = os.environ["GEMINI_API_KEY"]
+SLACK_BOT_TOKEN  = os.environ["SLACK_BOT_TOKEN"]
+SLACK_CHANNEL_ID = os.environ["SLACK_CHANNEL_ID"]
+TIMEZONE         = "America/Chicago"
+MODEL            = "gemini-2.0-flash"
 
 
-# ── Claude: Fetch & Summarize ──────────────────────────────────────────────────
+# ── Gemini: Fetch & Summarize ─────────────────────────────────────────────────
 def fetch_digest(edition: str) -> str:
-    client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client   = genai.Client(api_key=GEMINI_API_KEY)
     tz       = pytz.timezone(TIMEZONE)
     date_str = datetime.now(tz).strftime("%B %d, %Y")
 
@@ -113,16 +115,17 @@ _Sources searched live • Evening Edition • 6 PM CST_
 
 Rules: factual and unbiased, 1-2 sentences per bullet, skip sections with no news, respond with ONLY the Slack message."""
 
-    log.info(f"Fetching {edition} digest from Claude with web search...")
+    log.info(f"Fetching {edition} digest from Gemini with Google Search...")
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1500,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[{"role": "user", "content": prompt}],
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+        ),
     )
 
-    return "".join(b.text for b in response.content if b.type == "text").strip()
+    return response.text.strip()
 
 
 # ── Slack: Post ────────────────────────────────────────────────────────────────

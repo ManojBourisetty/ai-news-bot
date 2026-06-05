@@ -1,6 +1,6 @@
 # 🤖 AI News Daily — Slack Bot
 
-Automated twice-daily AI news digest delivered to Slack, powered by **Claude** (live web search) + **GitHub Actions**.
+Automated twice-daily AI news digest delivered to Slack, powered by **Gemini 2.0 Flash** (live Google Search) + **GitHub Actions**. Completely free to run.
 
 | Edition | Time | Coverage |
 |---|---|---|
@@ -21,9 +21,9 @@ Add these three secrets:
 
 | Secret Name | Where to get it |
 |---|---|
-| ANTHROPIC_API_KEY | https://console.anthropic.com |
-| SLACK_BOT_TOKEN | https://api.slack.com/apps → your app → OAuth & Permissions |
-| SLACK_CHANNEL_ID | Your #ai-news-daily channel ID (e.g. C0B8HAB6589) |
+| `GEMINI_API_KEY` | https://aistudio.google.com → Get API key (free, no credit card) |
+| `SLACK_BOT_TOKEN` | https://api.slack.com/apps → your app → OAuth & Permissions |
+| `SLACK_CHANNEL_ID` | Your #ai-news-daily channel ID (e.g. C0B8HAB6589) |
 
 ### 3. Create a Slack Bot (if you haven't)
 
@@ -78,7 +78,7 @@ GitHub Actions uses UTC. CST = UTC−6 (winter) / CDT = UTC−5 (summer).
 | Resource | Cost |
 |---|---|
 | GitHub Actions | Free (2,000 min/month on free tier — ~2 min/day) |
-| Anthropic API | ~$0.01–0.03 per digest (Sonnet with web search) |
+| Gemini 2.0 Flash | Free (Google AI Studio free tier) |
 | Slack API | Free |
 
-Estimated total: ~$1–2/month
+Estimated total: **$0/month**
