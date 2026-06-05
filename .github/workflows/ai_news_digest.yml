@@ -2,8 +2,9 @@ name: AI News Daily Digest
 
 on:
   schedule:
-    - cron: "0 14 * * *"
-    - cron: "0 0 * * *"
+    - cron: "0 14 * * *"    # 8 AM CST  — Morning global news
+    - cron: "0 0 * * *"     # 6 PM CST  — Evening AI news
+    - cron: "0 16 * * 5"    # 10 AM CST Friday — Weekly AI roundup
   workflow_dispatch:
     inputs:
       edition:
@@ -14,6 +15,7 @@ on:
         options:
           - morning
           - evening
+          - weekly
 
 jobs:
   send-digest:
@@ -23,28 +25,67 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
+
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Download seen headlines cache
+        uses: actions/download-artifact@v4
+        with:
+          name: seen-headlines
+          path: .
+        continue-on-error: true
+
       - name: Determine edition from schedule
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "EDITION=${{ github.event.inputs.edition }}" >> $GITHUB_ENV
           else
             HOUR=$(date -u +"%H")
+            DOW=$(date -u +"%u")
             if [ "$HOUR" = "14" ]; then
               echo "EDITION=morning" >> $GITHUB_ENV
+            elif [ "$HOUR" = "16" ] && [ "$DOW" = "5" ]; then
+              echo "EDITION=weekly" >> $GITHUB_ENV
             else
               echo "EDITION=evening" >> $GITHUB_ENV
             fi
           fi
+
       - name: Send AI News Digest
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
         run: python ai_news_bot.py --once $EDITION
+
+      - name: Upload seen headlines cache
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seen-headlines
+          path: seen_headlines.json
+          retention-days: 2
+          overwrite: true
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+        run: |
+          python -c "
+          from slack_sdk import WebClient
+          import os
+          client = WebClient(token=os.environ['SLACK_BOT_TOKEN'])
+          client.chat_postMessage(
+              channel=os.environ['SLACK_CHANNEL_ID'],
+              text=':x: *AI News Digest failed* — <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>'
+          )
+          "
