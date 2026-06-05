@@ -1,11 +1,13 @@
 # 🤖 AI News Daily — Slack Bot
 
-Automated twice-daily AI news digest delivered to Slack, powered by **Gemini 2.0 Flash** (live Google Search) + **GitHub Actions**. Completely free to run.
+Automated twice-daily AI news digest delivered to Slack, powered by **Groq (Llama 3.3-70B)** + **free RSS feeds** + **GitHub Actions**. 100% free, no credit card required anywhere.
 
 | Edition | Time | Coverage |
 |---|---|---|
 | 🌅 Morning | 8:00 AM CST | Last 18 hours of global AI news |
 | 🌆 Evening | 6:00 PM CST | Last 10 hours — what broke today |
+
+**News sources:** TechCrunch • VentureBeat • The Verge • Wired • MIT Tech Review • Ars Technica
 
 ---
 
@@ -21,7 +23,7 @@ Add these three secrets:
 
 | Secret Name | Where to get it |
 |---|---|
-| `GEMINI_API_KEY` | https://aistudio.google.com → Get API key (free, no credit card) |
+| `GROQ_API_KEY` | https://console.groq.com → API Keys → Create API Key (free, no credit card) |
 | `SLACK_BOT_TOKEN` | https://api.slack.com/apps → your app → OAuth & Permissions |
 | `SLACK_CHANNEL_ID` | Your #ai-news-daily channel ID (e.g. C0B8HAB6589) |
 
@@ -78,7 +80,8 @@ GitHub Actions uses UTC. CST = UTC−6 (winter) / CDT = UTC−5 (summer).
 | Resource | Cost |
 |---|---|
 | GitHub Actions | Free (2,000 min/month on free tier — ~2 min/day) |
-| Gemini 2.0 Flash | Free (Google AI Studio free tier) |
+| Groq API (Llama 3.3-70B) | Free tier |
+| RSS Feeds | Free |
 | Slack API | Free |
 
 Estimated total: **$0/month**

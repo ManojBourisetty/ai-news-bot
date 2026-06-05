@@ -1,16 +1,15 @@
 """
 AI News Daily — GitHub Actions Edition
 =======================================
-Fetches the latest global AI news via Gemini (Google Search grounding)
-and posts a digest to Slack. Designed to be triggered by
-GitHub Actions cron schedule — no persistent process needed.
+Fetches AI headlines from free RSS feeds, then uses Groq (free Llama 3)
+to format a digest and posts it to Slack. 100% free, no billing required.
 
 Usage:
     python ai_news_bot.py --once morning
     python ai_news_bot.py --once evening
 
 Environment Variables (set as GitHub Actions Secrets):
-    GEMINI_API_KEY    - Google AI Studio API key (free at aistudio.google.com)
+    GROQ_API_KEY      - Groq API key (free at console.groq.com)
     SLACK_BOT_TOKEN   - Slack Bot OAuth token (xoxb-...)
     SLACK_CHANNEL_ID  - Slack channel ID (e.g. C0B8HAB6589)
 """
@@ -19,11 +18,11 @@ import os
 import sys
 import logging
 import argparse
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone, timedelta
 
-from google import genai
-from google.genai import types
+import pytz
+import feedparser
+from groq import Groq
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
@@ -35,23 +34,66 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-GEMINI_API_KEY   = os.environ["GEMINI_API_KEY"]
+GROQ_API_KEY     = os.environ["GROQ_API_KEY"]
 SLACK_BOT_TOKEN  = os.environ["SLACK_BOT_TOKEN"]
 SLACK_CHANNEL_ID = os.environ["SLACK_CHANNEL_ID"]
 TIMEZONE         = "America/Chicago"
-MODEL            = "gemini-2.0-flash"
+MODEL            = "llama-3.3-70b-versatile"
+
+RSS_FEEDS = [
+    ("TechCrunch AI",   "https://techcrunch.com/category/artificial-intelligence/feed/"),
+    ("VentureBeat AI",  "https://venturebeat.com/category/ai/feed/"),
+    ("The Verge AI",    "https://www.theverge.com/ai-artificial-intelligence/rss/index.xml"),
+    ("Wired AI",        "https://www.wired.com/feed/tag/ai/latest/rss"),
+    ("MIT Tech Review", "https://www.technologyreview.com/topic/artificial-intelligence/feed"),
+    ("Ars Technica",    "https://feeds.arstechnica.com/arstechnica/technology-lab"),
+]
 
 
-# ── Gemini: Fetch & Summarize ─────────────────────────────────────────────────
+# ── RSS: Fetch Headlines ────────────────────────────────────────────────────
+def fetch_headlines(hours: int) -> str:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    items = []
+
+    for source, url in RSS_FEEDS:
+        try:
+            feed = feedparser.parse(url)
+            for entry in feed.entries[:15]:
+                published = None
+                if hasattr(entry, "published_parsed") and entry.published_parsed:
+                    published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+
+                if published and published < cutoff:
+                    continue
+
+                title   = entry.get("title", "").strip()
+                summary = entry.get("summary", "")[:200].strip()
+
+                if title:
+                    items.append(f"[{source}] {title} — {summary}")
+        except Exception as e:
+            log.warning(f"Failed to fetch {source}: {e}")
+
+    log.info(f"Fetched {len(items)} headlines from the past {hours} hours")
+    return "\n".join(items) if items else "No recent headlines found."
+
+
+# ── Groq: Format Digest ──────────────────────────────────────────────────────
 def fetch_digest(edition: str) -> str:
-    client   = genai.Client(api_key=GEMINI_API_KEY)
+    hours    = 18 if edition == "morning" else 10
     tz       = pytz.timezone(TIMEZONE)
     date_str = datetime.now(tz).strftime("%B %d, %Y")
+
+    headlines = fetch_headlines(hours)
 
     if edition == "morning":
         prompt = f"""You are an AI news analyst. Today is {date_str}.
 
-Search the web for the LATEST global AI news from the past 18 hours and write a morning briefing for Slack.
+Here are the latest AI news headlines from the past {hours} hours:
+
+{headlines}
+
+Write a morning briefing for Slack using ONLY the headlines above. Do not invent stories.
 
 Format EXACTLY like this (use Slack mrkdwn):
 
@@ -65,29 +107,33 @@ Format EXACTLY like this (use Slack mrkdwn):
 • [Story]
 
 *💰 Business & Funding*
-• [Item if any]
+• [Item if any, else omit this section]
 
 *🤖 Model & Tech Releases*
-• [Item if any]
+• [Item if any, else omit this section]
 
 *⚖️ Policy & Regulation*
-• [Item if any]
+• [Item if any, else omit this section]
 
 *🌍 Global & Geopolitical AI*
-• [Item if any]
+• [Item if any, else omit this section]
 
 *⚠️ Safety & Ethics Watch*
-• [Item if any]
+• [Item if any, else omit this section]
 
 ---
-_Sources searched live • Morning Edition • 8 AM CST_
+_Sources: TechCrunch • VentureBeat • The Verge • Wired • MIT Tech Review • Morning Edition • 8 AM CST_
 
-Rules: factual and unbiased, 1-2 sentences per bullet, skip sections with no news, respond with ONLY the Slack message."""
+Rules: factual and unbiased, 1-2 sentences per bullet, omit sections with no relevant news, respond with ONLY the Slack message."""
 
     else:
         prompt = f"""You are an AI news analyst. Today is {date_str}.
 
-Search the web for the LATEST global AI news from the past 10 hours and write an evening update for Slack.
+Here are the latest AI news headlines from the past {hours} hours:
+
+{headlines}
+
+Write an evening update for Slack using ONLY the headlines above. Do not invent stories.
 
 Format EXACTLY like this (use Slack mrkdwn):
 
@@ -99,33 +145,32 @@ Format EXACTLY like this (use Slack mrkdwn):
 • [Story]
 
 *📈 Market & Business Moves*
-• [Item if any]
+• [Item if any, else omit this section]
 
 *🧪 Research & Releases*
-• [Item if any]
+• [Item if any, else omit this section]
 
 *🌍 Global Developments*
-• [Item if any]
+• [Item if any, else omit this section]
 
 *🗣️ Notable Quote / Take*
-• [One notable quote or reaction if available]
+• [One notable quote or reaction if available, else omit this section]
 
 ---
-_Sources searched live • Evening Edition • 6 PM CST_
+_Sources: TechCrunch • VentureBeat • The Verge • Wired • MIT Tech Review • Evening Edition • 6 PM CST_
 
-Rules: factual and unbiased, 1-2 sentences per bullet, skip sections with no news, respond with ONLY the Slack message."""
+Rules: factual and unbiased, 1-2 sentences per bullet, omit sections with no relevant news, respond with ONLY the Slack message."""
 
-    log.info(f"Fetching {edition} digest from Gemini with Google Search...")
+    log.info(f"Formatting {edition} digest with Groq ({MODEL})...")
 
-    response = client.models.generate_content(
+    client = Groq(api_key=GROQ_API_KEY)
+    response = client.chat.completions.create(
+        messages=[{"role": "user", "content": prompt}],
         model=MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            tools=[types.Tool(google_search=types.GoogleSearch())],
-        ),
+        max_tokens=1500,
     )
 
-    return response.text.strip()
+    return response.choices[0].message.content.strip()
 
 
 # ── Slack: Post ────────────────────────────────────────────────────────────────
