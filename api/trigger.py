@@ -42,12 +42,15 @@ class handler(BaseHTTPRequestHandler):
             self._respond(400, {"error": f"unknown edition: {edition}"})
             return
 
+        # Respond immediately so Vercel doesn't retry the slow request
+        self._respond(202, {"accepted": True, "edition": edition})
+
         try:
             seen, last_runs = load_cache()
             digest, new_hashes = fetch_digest(edition, seen)
 
             if not digest:
-                self._respond(500, {"error": "empty digest"})
+                log.error("Empty digest — aborting.")
                 return
 
             success = post_to_slack(digest)
@@ -55,11 +58,8 @@ class handler(BaseHTTPRequestHandler):
             if success:
                 last_runs[edition] = datetime.now(timezone.utc).isoformat()
                 save_cache(seen, [] if edition == "weekly" else new_hashes, last_runs)
-
-            self._respond(200 if success else 500, {"sent": success, "edition": edition})
         except Exception as exc:
             log.exception("Bot error")
-            self._respond(500, {"error": str(exc)})
 
     def _respond(self, code: int, body: dict):
         self.send_response(code)
