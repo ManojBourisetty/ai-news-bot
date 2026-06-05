@@ -45,7 +45,7 @@ SLACK_BOT_TOKEN  = os.environ["SLACK_BOT_TOKEN"]
 SLACK_CHANNEL_ID = os.environ["SLACK_CHANNEL_ID"]
 TIMEZONE         = "America/Chicago"
 MODEL            = "llama-3.3-70b-versatile"
-CACHE_FILE       = "seen_headlines.json"
+CACHE_FILE       = "/tmp/seen_headlines.json"
 CACHE_MAX        = 400
 
 # Groq free tier: 12,000 TPM. Budget per edition (input + 2500 output):

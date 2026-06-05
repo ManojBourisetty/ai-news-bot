@@ -1,31 +1,32 @@
 # 🤖 AI News Daily — Slack Bot
 
-Automated twice-daily AI news digest delivered to Slack, powered by **Groq (Llama 3.3-70B)** + **free RSS feeds** + **GitHub Actions**. 100% free, no credit card required anywhere.
+Automated twice-daily AI news digest delivered to Slack, powered by **Groq (Llama 3.3-70B)** + **free RSS feeds** + **Vercel Crons**.
 
 | Edition | Time | Coverage |
 |---|---|---|
-| 🌅 Morning | 8:00 AM CST | Last 18 hours of global AI news |
-| 🌆 Evening | 6:00 PM CST | Last 10 hours — what broke today |
+| 🌅 Morning | 8:00 AM CST (13:00 UTC) | Global + India news — last 18 hours |
+| 🌆 Evening | 6:00 PM CST (23:00 UTC) | AI-specific digest — last 10 hours |
+| 📅 Weekly (Fri) | 10:00 AM CST (15:00 UTC) | AI week in review |
 
-**News sources:** TechCrunch • VentureBeat • The Verge • Wired • MIT Tech Review • Ars Technica
+**News sources:** TechCrunch • VentureBeat • The Verge • Wired • MIT Tech Review • Ars Technica • OpenAI • Anthropic • DeepMind • HuggingFace • Reuters • BBC • AP • The Hindu • NDTV
 
 ---
 
-## 🚀 Quick Setup (5 minutes)
+## 🚀 Setup
 
-### 1. Fork / clone this repo
+### 1. Deploy to Vercel
 
-### 2. Add GitHub Secrets
+Connect this repo to a Vercel project. Vercel auto-deploys on push to `main`.
 
-Go to your repo → Settings → Secrets and variables → Actions → New repository secret
+### 2. Add Environment Variables in Vercel
 
-Add these three secrets:
+Go to your Vercel project → Settings → Environment Variables and add:
 
-| Secret Name | Where to get it |
+| Variable | Where to get it |
 |---|---|
-| `GROQ_API_KEY` | https://console.groq.com → API Keys → Create API Key (free, no credit card) |
+| `GROQ_API_KEY` | https://console.groq.com → API Keys → Create API Key (free) |
 | `SLACK_BOT_TOKEN` | https://api.slack.com/apps → your app → OAuth & Permissions |
-| `SLACK_CHANNEL_ID` | Your #ai-news-daily channel ID (e.g. C0B8HAB6589) |
+| `SLACK_CHANNEL_ID` | Your Slack channel ID (e.g. C0B8HAB6589) |
 
 ### 3. Create a Slack Bot (if you haven't)
 
@@ -34,10 +35,9 @@ Add these three secrets:
 3. Install to workspace → copy the `xoxb-...` token
 4. Invite bot to your channel: `/invite @YourBotName`
 
-### 4. Enable GitHub Actions
+### 4. Verify Crons Are Active
 
-Push to main — the workflow activates automatically on the cron schedule.
-To test immediately: Actions tab → AI News Daily Digest → Run workflow → Choose edition
+In Vercel → your project → Settings → Crons — you should see three entries matching `vercel.json`. They fire automatically once deployed.
 
 ---
 
@@ -45,11 +45,11 @@ To test immediately: Actions tab → AI News Daily Digest → Run workflow → C
 
 ```
 ai-news-bot/
-├── .github/
-│   └── workflows/
-│       └── ai_news_digest.yml
-├── ai_news_bot.py
+├── api/
+│   └── trigger.py       # Vercel serverless function (cron entry point)
+├── ai_news_bot.py        # Core bot logic (RSS → Groq → Slack)
 ├── requirements.txt
+├── vercel.json           # Cron schedule + function config
 └── README.md
 ```
 
@@ -57,21 +57,32 @@ ai-news-bot/
 
 ## ⏰ Cron Schedule
 
-```yaml
-- cron: "0 14 * * *"   # 8 AM CST (14:00 UTC)
-- cron: "0 0 * * *"    # 6 PM CST (00:00 UTC)
+```json
+{ "path": "/api/trigger?edition=morning", "schedule": "0 13 * * *" }   // 8 AM CST
+{ "path": "/api/trigger?edition=evening", "schedule": "0 23 * * *" }   // 6 PM CST
+{ "path": "/api/trigger?edition=weekly",  "schedule": "0 15 * * 5" }   // 10 AM CST Fri
 ```
 
-GitHub Actions uses UTC. CST = UTC−6 (winter) / CDT = UTC−5 (summer).
+All times in UTC. CST = UTC−6.
 
 ---
 
 ## 🛠️ Manual Trigger
 
-1. Go to Actions → AI News Daily Digest
-2. Click **Run workflow**
-3. Select `morning` or `evening`
-4. Click **Run workflow** ✅
+Hit the function directly from your browser or curl:
+
+```bash
+curl "https://your-project.vercel.app/api/trigger?edition=morning"
+curl "https://your-project.vercel.app/api/trigger?edition=evening"
+curl "https://your-project.vercel.app/api/trigger?edition=weekly"
+```
+
+---
+
+## ⚠️ Notes
+
+- **Vercel plan**: Cron jobs and 60s function timeout require the **Pro** plan.
+- **Deduplication cache**: Vercel serverless functions are stateless — the seen-headlines cache does not persist across invocations. Headlines may occasionally repeat between editions, but each run fetches and summarises correctly.
 
 ---
 
@@ -79,9 +90,7 @@ GitHub Actions uses UTC. CST = UTC−6 (winter) / CDT = UTC−5 (summer).
 
 | Resource | Cost |
 |---|---|
-| GitHub Actions | Free (2,000 min/month on free tier — ~2 min/day) |
+| Vercel Pro | $20/month (required for crons + 60s timeout) |
 | Groq API (Llama 3.3-70B) | Free tier |
 | RSS Feeds | Free |
 | Slack API | Free |
-
-Estimated total: **$0/month**
