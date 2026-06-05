@@ -1,7 +1,7 @@
 """
 AI News Daily — GitHub Actions Edition
 =======================================
-Morning:  Global news digest (world, tech, business, politics)
+Morning:  Global + India news digest (world, tech, business, politics)
 Evening:  AI-specific digest (models, research, funding, policy)
 Weekly:   Friday roundup of the week’s biggest AI stories
 
@@ -46,7 +46,7 @@ SLACK_CHANNEL_ID = os.environ["SLACK_CHANNEL_ID"]
 TIMEZONE         = "America/Chicago"
 MODEL            = "llama-3.3-70b-versatile"
 CACHE_FILE       = "seen_headlines.json"
-CACHE_MAX        = 300
+CACHE_MAX        = 400
 
 # Global news feeds — morning edition
 GLOBAL_FEEDS = [
@@ -57,6 +57,16 @@ GLOBAL_FEEDS = [
     ("NPR News",     "https://feeds.npr.org/1001/rss.xml"),
     ("TechCrunch",   "https://techcrunch.com/feed/"),
     ("Ars Technica", "https://feeds.arstechnica.com/arstechnica/index"),
+]
+
+# India news feeds — morning edition (dedicated section)
+INDIA_FEEDS = [
+    ("The Hindu",        "https://www.thehindu.com/feeder/default.rss"),
+    ("NDTV",             "https://feeds.feedburner.com/ndtvnews-top-stories"),
+    ("Times of India",   "https://timesofindia.indiatimes.com/rssfeedstopstories.cms"),
+    ("Indian Express",   "https://indianexpress.com/feed/"),
+    ("Economic Times",   "https://economictimes.indiatimes.com/rssfeedstopstories.cms"),
+    ("Hindustan Times",  "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml"),
 ]
 
 # AI-specific feeds — evening + weekly editions
@@ -109,20 +119,14 @@ def _key_words(title: str) -> set:
     return {w for w in words if w not in STOP_WORDS}
 
 def rank_by_trending(items: list) -> list:
-    """
-    Score each headline by how many other headlines share 2+ keywords.
-    Headlines covered by multiple sources bubble to the top.
-    Prepends [\U0001f4e1 N sources] to headlines with score >= 1.
-    """
-    # Extract title portion (strip source prefix and summary)
+    """Score each headline by how many other headlines share 2+ keywords."""
     titles = []
     for item in items:
-        raw = item.split(" — ")[0]          # drop summary
-        raw = re.sub(r"^\[.*?\]\s*", "", raw)  # drop [Source]
+        raw = item.split(" — ")[0]
+        raw = re.sub(r"^\[.*?\]\s*", "", raw)
         titles.append(raw)
 
     item_words = [_key_words(t) for t in titles]
-
     scores = []
     for i, words_i in enumerate(item_words):
         if not words_i:
@@ -134,15 +138,10 @@ def rank_by_trending(items: list) -> list:
         )
         scores.append(overlap)
 
-    # Sort by score descending, preserving original order for ties
     ranked = sorted(zip(scores, range(len(items)), items), key=lambda x: x[0], reverse=True)
-
     result = []
     for score, _, item in ranked:
-        if score >= 1:
-            result.append(f"[📡 {score + 1} sources] {item}")
-        else:
-            result.append(item)
+        result.append(f"[📡 {score + 1} sources] {item}" if score >= 1 else item)
 
     trending = sum(1 for s, _, _ in ranked if s >= 1)
     log.info(f"Trending scorer: {trending}/{len(items)} headlines covered by 2+ sources")
@@ -150,7 +149,7 @@ def rank_by_trending(items: list) -> list:
 
 
 # ── RSS: Fetch Headlines ──────────────────────────────────────────────────
-def fetch_headlines(feeds: list, hours: int, seen: set) -> tuple:
+def fetch_headlines(feeds: list, hours: int, seen: set, rank: bool = True) -> tuple:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     items, new_hashes = [], []
 
@@ -175,16 +174,13 @@ def fetch_headlines(feeds: list, hours: int, seen: set) -> tuple:
         except Exception as e:
             log.warning(f"Failed to fetch {source}: {e}")
 
-    log.info(f"Fetched {len(items)} new headlines (filtered duplicates) from past {hours}h")
-
-    # Rank by cross-source coverage so Groq sees the most-covered stories first
-    ranked = rank_by_trending(items)
+    log.info(f"Fetched {len(items)} new headlines from past {hours}h")
+    ranked = rank_by_trending(items) if rank and items else items
     return ("\n".join(ranked) if ranked else "No recent headlines found."), new_hashes
 
 
 # ── Block Kit Formatter ────────────────────────────────────────────────────
 def build_blocks(message: str) -> list:
-    """Split message text into Slack Block Kit section blocks (max 3000 chars each)."""
     blocks = []
     chunk = ""
     for line in message.split("\n"):
@@ -205,20 +201,26 @@ def fetch_digest(edition: str, seen: set) -> tuple:
     date_str = datetime.now(tz).strftime("%B %d, %Y")
 
     if edition == "morning":
-        headlines, new_hashes = fetch_headlines(GLOBAL_FEEDS, hours=18, seen=seen)
-        prompt = f"""You are a world news analyst. Today is {date_str}.
+        global_hl, global_hashes = fetch_headlines(GLOBAL_FEEDS, hours=18, seen=seen)
+        # Pass seen + global hashes so India fetch doesn’t repeat cross-feed duplicates
+        india_seen = seen | set(global_hashes)
+        india_hl, india_hashes   = fetch_headlines(INDIA_FEEDS, hours=18, seen=india_seen, rank=False)
+        new_hashes = global_hashes + india_hashes
 
-Here are the latest global headlines ranked by how many sources are covering each story
-(headlines marked [\U0001f4e1 N sources] are covered by N outlets — prioritise these):
+        prompt = f"""You are a world and India news analyst. Today is {date_str}.
 
-{headlines}
+GLOBAL headlines (ranked by source coverage — [📡 N sources] = covered by N outlets, prioritise these):
+{global_hl}
 
-Write a rich morning global news briefing for Slack. Use ONLY the headlines above. Do not invent stories.
-Prioritise multi-source stories in Top Stories. Aim for 5-7 bullets there.
+INDIA headlines:
+{india_hl}
+
+Write a rich morning briefing for Slack. Use ONLY the headlines above. Do not invent stories.
+Prioritise multi-source global stories in Top Stories. Include a dedicated India News section.
 
 Format EXACTLY like this (use Slack mrkdwn):
 
-🌅 *Good Morning! Global News Digest — {date_str}*
+🌅 *Good Morning! Daily News Digest — {date_str}*
 
 *🌍 Top Stories*
 • [Story — 2 sentences with context and why it matters]
@@ -227,7 +229,13 @@ Format EXACTLY like this (use Slack mrkdwn):
 • [Story]
 • [Story]
 • [Story if available]
-• [Story if available]
+
+*🌇 India News*
+• [India story — 2 sentences with context]
+• [India story]
+• [India story]
+• [India story if available]
+• [India story if available]
 
 *💼 Business & Markets*
 • [Item — company, market move, or economic development]
@@ -243,21 +251,18 @@ Format EXACTLY like this (use Slack mrkdwn):
 *🔥 Breaking / Developing*
 • [Any fast-moving story if available]
 
-_📰 Sources: Reuters • BBC • The Guardian • AP • NPR • TechCrunch • Morning Edition • 8 AM CST_
+_📰 Sources: Reuters • BBC • AP • The Guardian • NPR • The Hindu • NDTV • Times of India • Indian Express • Economic Times • Morning Edition • 8 AM CST_
 
-Rules: factual and unbiased, 2 sentences per bullet with context, omit sections with no relevant news, respond with ONLY the Slack message."""
+Rules: factual and unbiased, 2 sentences per bullet, omit sections with no relevant news, respond with ONLY the Slack message."""
 
     elif edition == "evening":
         headlines, new_hashes = fetch_headlines(AI_FEEDS, hours=10, seen=seen)
         prompt = f"""You are an AI news analyst. Today is {date_str}.
 
-Here are the latest AI-specific headlines ranked by how many sources are covering each story
-(headlines marked [\U0001f4e1 N sources] are covered by N outlets — prioritise these):
-
+Latest AI headlines (ranked by source coverage — [📡 N sources] = trending, prioritise these):
 {headlines}
 
 Write a rich AI evening update for Slack. Use ONLY the headlines above. Do not invent stories.
-Prioritise multi-source stories in Top AI Stories. Aim for 4-5 bullets there.
 
 Format EXACTLY like this (use Slack mrkdwn):
 
@@ -286,18 +291,16 @@ Format EXACTLY like this (use Slack mrkdwn):
 
 _📰 Sources: TechCrunch • VentureBeat • The Verge • Wired • MIT Tech Review • OpenAI • Anthropic • DeepMind • HN • 404 Media • Evening Edition • 6 PM CST_
 
-Rules: factual and unbiased, 2 sentences per bullet with context, omit sections with no relevant news, respond with ONLY the Slack message."""
+Rules: factual and unbiased, 2 sentences per bullet, omit sections with no relevant news, respond with ONLY the Slack message."""
 
-    else:  # weekly — bypass daily dedup to get full week picture
+    else:  # weekly — bypass daily dedup for full week picture
         headlines, new_hashes = fetch_headlines(AI_FEEDS, hours=168, seen=set())
         prompt = f"""You are an AI news analyst. This is the week ending {date_str}.
 
-Here are the AI news headlines from the past 7 days, ranked by how many sources covered each story
-(headlines marked [\U0001f4e1 N sources] are covered by N outlets — these are the most important):
-
+AI headlines from the past 7 days (ranked by source coverage — [📡 N sources] = most covered):
 {headlines}
 
-Write a Friday weekly roundup for Slack. Use ONLY the headlines above. Pick only the most significant stories. Do not invent stories.
+Write a Friday weekly roundup for Slack. Use ONLY the headlines above. Pick only the most significant stories.
 
 Format EXACTLY like this (use Slack mrkdwn):
 
@@ -380,7 +383,6 @@ def main():
     success = post_to_slack(digest)
 
     if success:
-        # Weekly bypasses daily dedup — don’t pollute the cache with 7-day-old hashes
         save_cache(seen, [] if args.once == "weekly" else new_hashes)
 
     sys.exit(0 if success else 1)
