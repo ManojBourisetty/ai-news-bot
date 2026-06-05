@@ -39,7 +39,6 @@ SLACK_BOT_TOKEN  = os.environ["SLACK_BOT_TOKEN"]
 SLACK_CHANNEL_ID = os.environ["SLACK_CHANNEL_ID"]
 TIMEZONE         = "America/Chicago"
 MODEL            = "llama-3.3-70b-versatile"
-MIN_HEADLINES    = 10  # if fewer found, widen window to 24 h
 
 RSS_FEEDS = [
     ("TechCrunch AI",   "https://techcrunch.com/category/artificial-intelligence/feed/"),
@@ -52,7 +51,7 @@ RSS_FEEDS = [
 
 
 # ── RSS: Fetch Headlines ───────────────────────────────────────────────────
-def _scrape(hours: int) -> list:
+def fetch_headlines(hours: int) -> str:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     items = []
     for source, url in RSS_FEEDS:
@@ -70,16 +69,7 @@ def _scrape(hours: int) -> list:
                     items.append(f"[{source}] {title} — {summary}")
         except Exception as e:
             log.warning(f"Failed to fetch {source}: {e}")
-    return items
-
-
-def fetch_headlines(hours: int) -> str:
-    items = _scrape(hours)
-    # Widen to 24 h if not enough content
-    if len(items) < MIN_HEADLINES:
-        log.info(f"Only {len(items)} headlines in {hours}h window — widening to 24 h")
-        items = _scrape(24)
-    log.info(f"Using {len(items)} headlines")
+    log.info(f"Fetched {len(items)} headlines from the past {hours} hours")
     return "\n".join(items) if items else "No recent AI headlines found."
 
 
@@ -94,7 +84,7 @@ def fetch_digest(edition: str) -> str:
     if edition == "morning":
         prompt = f"""You are an AI news analyst. Today is {date_str}.
 
-Here are the latest AI news headlines:
+Here are the latest AI news headlines from the past {hours} hours:
 
 {headlines}
 
@@ -139,12 +129,13 @@ Rules: factual and unbiased, 2 sentences per bullet with context, omit sections 
     else:
         prompt = f"""You are an AI news analyst. Today is {date_str}.
 
-Here are the latest AI news headlines:
+Here are the latest AI news headlines from the past {hours} hours:
 
 {headlines}
 
 Write a rich, detailed evening update for Slack using ONLY the headlines above. Do not invent stories.
 Aim for 4-5 top stories and fill every relevant section with 2-3 bullets.
+If fewer headlines are available, keep bullets concise but still informative.
 
 Format EXACTLY like this (use Slack mrkdwn):
 
