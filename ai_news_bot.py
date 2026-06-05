@@ -39,6 +39,7 @@ SLACK_BOT_TOKEN  = os.environ["SLACK_BOT_TOKEN"]
 SLACK_CHANNEL_ID = os.environ["SLACK_CHANNEL_ID"]
 TIMEZONE         = "America/Chicago"
 MODEL            = "llama-3.3-70b-versatile"
+MIN_HEADLINES    = 10  # if fewer found, widen window to 24 h
 
 RSS_FEEDS = [
     ("TechCrunch AI",   "https://techcrunch.com/category/artificial-intelligence/feed/"),
@@ -50,32 +51,36 @@ RSS_FEEDS = [
 ]
 
 
-# ── RSS: Fetch Headlines ────────────────────────────────────────────────────
-def fetch_headlines(hours: int) -> str:
+# ── RSS: Fetch Headlines ───────────────────────────────────────────────────
+def _scrape(hours: int) -> list:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     items = []
-
     for source, url in RSS_FEEDS:
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:15]:
+            for entry in feed.entries[:25]:
                 published = None
                 if hasattr(entry, "published_parsed") and entry.published_parsed:
                     published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
-
                 if published and published < cutoff:
                     continue
-
                 title   = entry.get("title", "").strip()
-                summary = entry.get("summary", "")[:200].strip()
-
+                summary = entry.get("summary", "")[:300].strip()
                 if title:
                     items.append(f"[{source}] {title} — {summary}")
         except Exception as e:
             log.warning(f"Failed to fetch {source}: {e}")
+    return items
 
-    log.info(f"Fetched {len(items)} headlines from the past {hours} hours")
-    return "\n".join(items) if items else "No recent headlines found."
+
+def fetch_headlines(hours: int) -> str:
+    items = _scrape(hours)
+    # Widen to 24 h if not enough content
+    if len(items) < MIN_HEADLINES:
+        log.info(f"Only {len(items)} headlines in {hours}h window — widening to 24 h")
+        items = _scrape(24)
+    log.info(f"Using {len(items)} headlines")
+    return "\n".join(items) if items else "No recent AI headlines found."
 
 
 # ── Groq: Format Digest ──────────────────────────────────────────────────────
@@ -89,77 +94,87 @@ def fetch_digest(edition: str) -> str:
     if edition == "morning":
         prompt = f"""You are an AI news analyst. Today is {date_str}.
 
-Here are the latest AI news headlines from the past {hours} hours:
+Here are the latest AI news headlines:
 
 {headlines}
 
-Write a morning briefing for Slack using ONLY the headlines above. Do not invent stories.
+Write a rich, detailed morning briefing for Slack using ONLY the headlines above. Do not invent stories.
+Aim for 5-7 top stories and fill every relevant section with 2-4 bullets.
 
 Format EXACTLY like this (use Slack mrkdwn):
 
 🌅 *Good Morning! AI News Digest — {date_str}*
 
 *🔥 Top Stories*
-• [Story — 1-2 sentences, factual, no bias]
+• [Story — 2 sentences with context and why it matters]
 • [Story]
 • [Story]
 • [Story]
 • [Story]
+• [Story if available]
+• [Story if available]
 
 *💰 Business & Funding*
-• [Item if any, else omit this section]
+• [Item — company, amount or deal detail if known]
+• [Item if available]
 
 *🤖 Model & Tech Releases*
-• [Item if any, else omit this section]
+• [Item — what was released and what’s notable about it]
+• [Item if available]
 
 *⚖️ Policy & Regulation*
-• [Item if any, else omit this section]
+• [Item if available]
 
 *🌍 Global & Geopolitical AI*
-• [Item if any, else omit this section]
+• [Item if available]
 
 *⚠️ Safety & Ethics Watch*
-• [Item if any, else omit this section]
+• [Item if available]
 
----
-_Sources: TechCrunch • VentureBeat • The Verge • Wired • MIT Tech Review • Morning Edition • 8 AM CST_
+―――
+_📰 Sources: TechCrunch • VentureBeat • The Verge • Wired • MIT Tech Review • Morning Edition • 8 AM CST_
 
-Rules: factual and unbiased, 1-2 sentences per bullet, omit sections with no relevant news, respond with ONLY the Slack message."""
+Rules: factual and unbiased, 2 sentences per bullet with context, omit sections with no relevant news, respond with ONLY the Slack message."""
 
     else:
         prompt = f"""You are an AI news analyst. Today is {date_str}.
 
-Here are the latest AI news headlines from the past {hours} hours:
+Here are the latest AI news headlines:
 
 {headlines}
 
-Write an evening update for Slack using ONLY the headlines above. Do not invent stories.
+Write a rich, detailed evening update for Slack using ONLY the headlines above. Do not invent stories.
+Aim for 4-5 top stories and fill every relevant section with 2-3 bullets.
 
 Format EXACTLY like this (use Slack mrkdwn):
 
 🌆 *Evening AI Update — {date_str}*
 
 *🔥 What Broke Today*
-• [Story — 1-2 sentences, factual, no bias]
+• [Story — 2 sentences with context and why it matters]
 • [Story]
 • [Story]
+• [Story if available]
+• [Story if available]
 
 *📈 Market & Business Moves*
-• [Item if any, else omit this section]
+• [Item — company, deal or market detail]
+• [Item if available]
 
 *🧪 Research & Releases*
-• [Item if any, else omit this section]
+• [Item — what was published or released and why it’s significant]
+• [Item if available]
 
 *🌍 Global Developments*
-• [Item if any, else omit this section]
+• [Item if available]
 
 *🗣️ Notable Quote / Take*
-• [One notable quote or reaction if available, else omit this section]
+• [One notable quote or reaction if available]
 
----
-_Sources: TechCrunch • VentureBeat • The Verge • Wired • MIT Tech Review • Evening Edition • 6 PM CST_
+―――
+_📰 Sources: TechCrunch • VentureBeat • The Verge • Wired • MIT Tech Review • Evening Edition • 6 PM CST_
 
-Rules: factual and unbiased, 1-2 sentences per bullet, omit sections with no relevant news, respond with ONLY the Slack message."""
+Rules: factual and unbiased, 2 sentences per bullet with context, omit sections with no relevant news, respond with ONLY the Slack message."""
 
     log.info(f"Formatting {edition} digest with Groq ({MODEL})...")
 
@@ -167,7 +182,7 @@ Rules: factual and unbiased, 1-2 sentences per bullet, omit sections with no rel
     response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model=MODEL,
-        max_tokens=1500,
+        max_tokens=2000,
     )
 
     return response.choices[0].message.content.strip()
