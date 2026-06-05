@@ -1,0 +1,48 @@
+name: AI News Daily Digest
+
+on:
+  schedule:
+    - cron: "0 14 * * *"
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      edition:
+        description: "Which edition to send?"
+        required: true
+        default: "morning"
+        type: choice
+        options:
+          - morning
+          - evening
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Determine edition from schedule
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "EDITION=${{ github.event.inputs.edition }}" >> $GITHUB_ENV
+          else
+            HOUR=$(date -u +"%H")
+            if [ "$HOUR" = "14" ]; then
+              echo "EDITION=morning" >> $GITHUB_ENV
+            else
+              echo "EDITION=evening" >> $GITHUB_ENV
+            fi
+          fi
+      - name: Send AI News Digest
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+        run: python ai_news_bot.py --once $EDITION
