@@ -17,11 +17,13 @@ Environment Variables (set as GitHub Actions Secrets):
 """
 
 import os
+import re
 import sys
 import json
 import hashlib
 import logging
 import argparse
+from collections import Counter
 from datetime import datetime, timezone, timedelta
 
 import pytz
@@ -73,6 +75,16 @@ AI_FEEDS = [
     ("404 Media",      "https://www.404media.co/rss/"),
 ]
 
+STOP_WORDS = {
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+    "has", "have", "had", "will", "would", "could", "should", "may", "might",
+    "this", "that", "these", "those", "it", "its", "as", "up", "out", "into",
+    "about", "over", "new", "says", "said", "after", "before", "more", "than",
+    "how", "why", "what", "who", "which", "when", "where", "not", "can", "do",
+    "does", "did", "get", "got", "make", "made", "use", "used", "using", "just",
+}
+
 
 # ── Deduplication Cache ──────────────────────────────────────────────────────
 def title_hash(title: str) -> str:
@@ -89,6 +101,52 @@ def save_cache(existing: set, new_hashes: list):
     combined = list(existing) + new_hashes
     with open(CACHE_FILE, "w") as f:
         json.dump(combined[-CACHE_MAX:], f)
+
+
+# ── Trending Score ───────────────────────────────────────────────────────────────
+def _key_words(title: str) -> set:
+    words = re.findall(r"\b[a-zA-Z]{3,}\b", title.lower())
+    return {w for w in words if w not in STOP_WORDS}
+
+def rank_by_trending(items: list) -> list:
+    """
+    Score each headline by how many other headlines share 2+ keywords.
+    Headlines covered by multiple sources bubble to the top.
+    Prepends [\U0001f4e1 N sources] to headlines with score >= 1.
+    """
+    # Extract title portion (strip source prefix and summary)
+    titles = []
+    for item in items:
+        raw = item.split(" — ")[0]          # drop summary
+        raw = re.sub(r"^\[.*?\]\s*", "", raw)  # drop [Source]
+        titles.append(raw)
+
+    item_words = [_key_words(t) for t in titles]
+
+    scores = []
+    for i, words_i in enumerate(item_words):
+        if not words_i:
+            scores.append(0)
+            continue
+        overlap = sum(
+            1 for j, words_j in enumerate(item_words)
+            if i != j and len(words_i & words_j) >= 2
+        )
+        scores.append(overlap)
+
+    # Sort by score descending, preserving original order for ties
+    ranked = sorted(zip(scores, range(len(items)), items), key=lambda x: x[0], reverse=True)
+
+    result = []
+    for score, _, item in ranked:
+        if score >= 1:
+            result.append(f"[📡 {score + 1} sources] {item}")
+        else:
+            result.append(item)
+
+    trending = sum(1 for s, _, _ in ranked if s >= 1)
+    log.info(f"Trending scorer: {trending}/{len(items)} headlines covered by 2+ sources")
+    return result
 
 
 # ── RSS: Fetch Headlines ──────────────────────────────────────────────────
@@ -118,7 +176,10 @@ def fetch_headlines(feeds: list, hours: int, seen: set) -> tuple:
             log.warning(f"Failed to fetch {source}: {e}")
 
     log.info(f"Fetched {len(items)} new headlines (filtered duplicates) from past {hours}h")
-    return ("\n".join(items) if items else "No recent headlines found."), new_hashes
+
+    # Rank by cross-source coverage so Groq sees the most-covered stories first
+    ranked = rank_by_trending(items)
+    return ("\n".join(ranked) if ranked else "No recent headlines found."), new_hashes
 
 
 # ── Block Kit Formatter ────────────────────────────────────────────────────
@@ -147,12 +208,13 @@ def fetch_digest(edition: str, seen: set) -> tuple:
         headlines, new_hashes = fetch_headlines(GLOBAL_FEEDS, hours=18, seen=seen)
         prompt = f"""You are a world news analyst. Today is {date_str}.
 
-Here are the latest global headlines from the past 18 hours:
+Here are the latest global headlines ranked by how many sources are covering each story
+(headlines marked [\U0001f4e1 N sources] are covered by N outlets — prioritise these):
 
 {headlines}
 
-Write a rich morning global news briefing for Slack using ONLY the headlines above. Do not invent stories.
-Aim for 5-7 top stories. Cover world events, politics, business, and technology.
+Write a rich morning global news briefing for Slack. Use ONLY the headlines above. Do not invent stories.
+Prioritise multi-source stories in Top Stories. Aim for 5-7 bullets there.
 
 Format EXACTLY like this (use Slack mrkdwn):
 
@@ -189,12 +251,13 @@ Rules: factual and unbiased, 2 sentences per bullet with context, omit sections 
         headlines, new_hashes = fetch_headlines(AI_FEEDS, hours=10, seen=seen)
         prompt = f"""You are an AI news analyst. Today is {date_str}.
 
-Here are the latest AI-specific headlines from the past 10 hours:
+Here are the latest AI-specific headlines ranked by how many sources are covering each story
+(headlines marked [\U0001f4e1 N sources] are covered by N outlets — prioritise these):
 
 {headlines}
 
-Write a rich AI evening update for Slack using ONLY the headlines above. Do not invent stories.
-Aim for 4-5 top stories and fill every relevant section with 2-3 bullets.
+Write a rich AI evening update for Slack. Use ONLY the headlines above. Do not invent stories.
+Prioritise multi-source stories in Top AI Stories. Aim for 4-5 bullets there.
 
 Format EXACTLY like this (use Slack mrkdwn):
 
@@ -229,11 +292,12 @@ Rules: factual and unbiased, 2 sentences per bullet with context, omit sections 
         headlines, new_hashes = fetch_headlines(AI_FEEDS, hours=168, seen=set())
         prompt = f"""You are an AI news analyst. This is the week ending {date_str}.
 
-Here are the AI news headlines from the past 7 days:
+Here are the AI news headlines from the past 7 days, ranked by how many sources covered each story
+(headlines marked [\U0001f4e1 N sources] are covered by N outlets — these are the most important):
 
 {headlines}
 
-Write a Friday weekly roundup for Slack using ONLY the headlines above. Pick only the most significant stories of the week. Do not invent stories.
+Write a Friday weekly roundup for Slack. Use ONLY the headlines above. Pick only the most significant stories. Do not invent stories.
 
 Format EXACTLY like this (use Slack mrkdwn):
 
@@ -241,7 +305,7 @@ Format EXACTLY like this (use Slack mrkdwn):
 _The biggest AI stories you need to know from this week_
 
 *🏆 Story of the Week*
-• [The single most important AI development this week — 3 sentences explaining what happened and why it matters]
+• [The single most important AI development — 3 sentences explaining what happened and why it matters]
 
 *🔥 Top Stories*
 • [Story — 2 sentences explaining significance]
