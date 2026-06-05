@@ -3,7 +3,7 @@ AI News Daily — GitHub Actions Edition
 =======================================
 Morning:  Global + India news digest (world, tech, business, politics)
 Evening:  AI-specific digest (models, research, funding, policy)
-Weekly:   Friday roundup of the week’s biggest AI stories
+Weekly:   Friday roundup of the week's biggest AI stories
 
 Usage:
     python ai_news_bot.py --once morning
@@ -32,14 +32,14 @@ from groq import Groq
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-# ── Logging ────────────────────────────────────────────────────────────────────
+# ── Logging ───────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 log = logging.getLogger(__name__)
 
-# ── Config ─────────────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────────────────
 GROQ_API_KEY     = os.environ["GROQ_API_KEY"]
 SLACK_BOT_TOKEN  = os.environ["SLACK_BOT_TOKEN"]
 SLACK_CHANNEL_ID = os.environ["SLACK_CHANNEL_ID"]
@@ -47,6 +47,16 @@ TIMEZONE         = "America/Chicago"
 MODEL            = "llama-3.3-70b-versatile"
 CACHE_FILE       = "seen_headlines.json"
 CACHE_MAX        = 400
+
+# Groq free tier: 12,000 TPM. Budget per edition (input + 2500 output):
+#   morning global: 20 headlines  (~4,000 tokens input)
+#   morning India:  15 headlines  (~3,000 tokens input) → total ~9,500 + 2,500 output = fine
+#   evening:        25 headlines  (~5,000 tokens input)
+#   weekly:         30 headlines  (~6,000 tokens input)
+MAX_GLOBAL   = 20
+MAX_INDIA    = 15
+MAX_EVENING  = 25
+MAX_WEEKLY   = 30
 
 # Global news feeds — morning edition
 GLOBAL_FEEDS = [
@@ -96,7 +106,7 @@ STOP_WORDS = {
 }
 
 
-# ── Deduplication Cache ──────────────────────────────────────────────────────
+# ── Deduplication Cache ──────────────────────────────────────────────────────────────────────────
 def title_hash(title: str) -> str:
     return hashlib.md5(title.lower().strip().encode()).hexdigest()
 
@@ -113,7 +123,7 @@ def save_cache(existing: set, new_hashes: list):
         json.dump(combined[-CACHE_MAX:], f)
 
 
-# ── Trending Score ───────────────────────────────────────────────────────────────
+# ── Trending Score ──────────────────────────────────────────────────────────────────────────────
 def _key_words(title: str) -> set:
     words = re.findall(r"\b[a-zA-Z]{3,}\b", title.lower())
     return {w for w in words if w not in STOP_WORDS}
@@ -148,8 +158,13 @@ def rank_by_trending(items: list) -> list:
     return result
 
 
-# ── RSS: Fetch Headlines ──────────────────────────────────────────────────
-def fetch_headlines(feeds: list, hours: int, seen: set, rank: bool = True) -> tuple:
+# ── RSS: Fetch Headlines ──────────────────────────────────────────────────────────────────
+def fetch_headlines(feeds: list, hours: int, seen: set, rank: bool = True, max_items: int = 0) -> tuple:
+    """
+    Fetch and filter headlines. Returns (text_for_prompt, all_new_hashes).
+    max_items caps the prompt text to the top-ranked headlines, but all
+    fetched hashes are returned so the dedup cache stays complete.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     items, new_hashes = [], []
 
@@ -176,10 +191,17 @@ def fetch_headlines(feeds: list, hours: int, seen: set, rank: bool = True) -> tu
 
     log.info(f"Fetched {len(items)} new headlines from past {hours}h")
     ranked = rank_by_trending(items) if rank and items else items
+
+    # Cap what goes into the prompt to stay within Groq TPM limits.
+    # All hashes are still returned so the dedup cache remains accurate.
+    if max_items and len(ranked) > max_items:
+        log.info(f"Capping prompt to top {max_items}/{len(ranked)} headlines (Groq TPM budget)")
+        ranked = ranked[:max_items]
+
     return ("\n".join(ranked) if ranked else "No recent headlines found."), new_hashes
 
 
-# ── Block Kit Formatter ────────────────────────────────────────────────────
+# ── Block Kit Formatter ──────────────────────────────────────────────────────────────────────────
 def build_blocks(message: str) -> list:
     blocks = []
     chunk = ""
@@ -195,16 +217,20 @@ def build_blocks(message: str) -> list:
     return blocks
 
 
-# ── Groq: Format Digest ──────────────────────────────────────────────────────
+# ── Groq: Format Digest ──────────────────────────────────────────────────────────────────────────
 def fetch_digest(edition: str, seen: set) -> tuple:
     tz       = pytz.timezone(TIMEZONE)
     date_str = datetime.now(tz).strftime("%B %d, %Y")
 
     if edition == "morning":
-        global_hl, global_hashes = fetch_headlines(GLOBAL_FEEDS, hours=18, seen=seen)
-        # Pass seen + global hashes so India fetch doesn’t repeat cross-feed duplicates
+        global_hl, global_hashes = fetch_headlines(
+            GLOBAL_FEEDS, hours=18, seen=seen, max_items=MAX_GLOBAL
+        )
+        # Pass seen + global hashes so India fetch doesn't repeat cross-feed duplicates
         india_seen = seen | set(global_hashes)
-        india_hl, india_hashes   = fetch_headlines(INDIA_FEEDS, hours=18, seen=india_seen, rank=False)
+        india_hl, india_hashes = fetch_headlines(
+            INDIA_FEEDS, hours=18, seen=india_seen, rank=False, max_items=MAX_INDIA
+        )
         new_hashes = global_hashes + india_hashes
 
         prompt = f"""You are a world and India news analyst. Today is {date_str}.
@@ -256,7 +282,9 @@ _📰 Sources: Reuters • BBC • AP • The Guardian • NPR • The Hindu •
 Rules: factual and unbiased, 2 sentences per bullet, omit sections with no relevant news, respond with ONLY the Slack message."""
 
     elif edition == "evening":
-        headlines, new_hashes = fetch_headlines(AI_FEEDS, hours=10, seen=seen)
+        headlines, new_hashes = fetch_headlines(
+            AI_FEEDS, hours=10, seen=seen, max_items=MAX_EVENING
+        )
         prompt = f"""You are an AI news analyst. Today is {date_str}.
 
 Latest AI headlines (ranked by source coverage — [📡 N sources] = trending, prioritise these):
@@ -294,7 +322,9 @@ _📰 Sources: TechCrunch • VentureBeat • The Verge • Wired • MIT Tech R
 Rules: factual and unbiased, 2 sentences per bullet, omit sections with no relevant news, respond with ONLY the Slack message."""
 
     else:  # weekly — bypass daily dedup for full week picture
-        headlines, new_hashes = fetch_headlines(AI_FEEDS, hours=168, seen=set())
+        headlines, new_hashes = fetch_headlines(
+            AI_FEEDS, hours=168, seen=set(), max_items=MAX_WEEKLY
+        )
         prompt = f"""You are an AI news analyst. This is the week ending {date_str}.
 
 AI headlines from the past 7 days (ranked by source coverage — [📡 N sources] = most covered):
@@ -346,7 +376,7 @@ Rules: curate only the truly significant stories, 2-3 sentences per bullet for d
     return response.choices[0].message.content.strip(), new_hashes
 
 
-# ── Slack: Post ────────────────────────────────────────────────────────────────
+# ── Slack: Post ───────────────────────────────────────────────────────────────────────────────
 def post_to_slack(message: str) -> bool:
     client = WebClient(token=SLACK_BOT_TOKEN)
     try:
@@ -362,7 +392,7 @@ def post_to_slack(message: str) -> bool:
         return False
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+# ── Main ─────────────────────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
