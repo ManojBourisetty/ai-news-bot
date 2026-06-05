@@ -21,9 +21,22 @@ from ai_news_bot import fetch_digest, load_cache, post_to_slack, save_cache
 log = logging.getLogger(__name__)
 
 
+CRON_SECRET = os.environ.get("CRON_SECRET", "")
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         qs = parse_qs(urlparse(self.path).query)
+
+        # Vercel passes CRON_SECRET as Authorization: Bearer <secret> on cron requests.
+        # When set, reject any request that doesn't carry the right token so manual
+        # curls can't accidentally fire a duplicate send.
+        if CRON_SECRET:
+            auth = self.headers.get("Authorization", "")
+            if auth != f"Bearer {CRON_SECRET}":
+                self._respond(401, {"error": "unauthorized"})
+                return
+
         edition = qs.get("edition", ["morning"])[0]
         if edition not in ("morning", "evening", "weekly"):
             self._respond(400, {"error": f"unknown edition: {edition}"})
