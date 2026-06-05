@@ -1,0 +1,7 @@
+{
+  "crons": [
+    { "path": "/api/trigger?edition=morning", "schedule": "0 13 * * *" },
+    { "path": "/api/trigger?edition=evening", "schedule": "0 23 * * *" },
+    { "path": "/api/trigger?edition=weekly",  "schedule": "0 15 * * 5" }
+  ]
+}

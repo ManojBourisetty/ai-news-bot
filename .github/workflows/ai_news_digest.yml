@@ -1,15 +1,6 @@
 name: AI News Daily Digest
 
 on:
-  schedule:
-    - cron: "0 14 * * *"    # 9 AM CDT  — Morning (primary)
-    - cron: "30 14 * * *"   # 9:30 AM CDT — Morning (backup 1)
-    - cron: "0 15 * * *"    # 10 AM CDT — Morning (backup 2)
-    - cron: "0 0 * * *"     # 7 PM CDT  — Evening (primary)
-    - cron: "30 0 * * *"    # 7:30 PM CDT — Evening (backup 1)
-    - cron: "0 1 * * *"     # 8 PM CDT  — Evening (backup 2)
-    - cron: "0 16 * * 5"    # 11 AM CDT Friday — Weekly (primary)
-    - cron: "30 16 * * 5"   # 11:30 AM CDT Friday — Weekly (backup)
   workflow_dispatch:
     inputs:
       edition:
