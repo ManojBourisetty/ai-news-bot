@@ -27,6 +27,7 @@ Go to your Vercel project → Settings → Environment Variables and add:
 | `GROQ_API_KEY` | https://console.groq.com → API Keys → Create API Key (free) |
 | `SLACK_BOT_TOKEN` | https://api.slack.com/apps → your app → OAuth & Permissions |
 | `SLACK_CHANNEL_ID` | Your Slack channel ID (e.g. C0B8HAB6589) |
+| `CRON_SECRET` | Any long random string. Vercel sends it as a Bearer token on cron calls; when set, `/api/trigger` rejects requests without it. See `.env.example`. |
 
 ### 3. Create a Slack Bot (if you haven't)
 
@@ -49,6 +50,7 @@ ai-news-bot/
 │   └── trigger.py       # Vercel serverless function (cron entry point)
 ├── ai_news_bot.py        # Core bot logic (RSS → Groq → Slack)
 ├── requirements.txt
+├── .env.example          # Required environment variable names
 ├── vercel.json           # Cron schedule + function config
 └── README.md
 ```
@@ -69,10 +71,10 @@ All times in UTC. CST = UTC−6.
 
 ## 🛠️ Manual Trigger
 
-Hit the function directly from your browser or curl:
+Hit the function with curl (if `CRON_SECRET` is set, include the Authorization header):
 
 ```bash
-curl "https://your-project.vercel.app/api/trigger?edition=morning"
+curl -H "Authorization: Bearer $CRON_SECRET" "https://your-project.vercel.app/api/trigger?edition=morning"
 curl "https://your-project.vercel.app/api/trigger?edition=evening"
 curl "https://your-project.vercel.app/api/trigger?edition=weekly"
 ```
